@@ -26,7 +26,6 @@ app.get('/api/mongo/collections', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-
 app.get('/api/mongo/inspect/:collection', async (req, res) => {
   try {
     const db = getDatabase();
@@ -54,6 +53,7 @@ app.get('/api/mongo/inspect/:collection', async (req, res) => {
   }
 });
 
+
 app.get('/api/mongo/users', requireAuth, async (req, res) => {
   try {
     const db = getDatabase();
@@ -79,6 +79,28 @@ app.get('/api/mongo/users', requireAuth, async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+app.patch('/api/mongo/users/:userId/status', requireAuth, async (req, res) => {
+  try {
+    const db = getDatabase();
+    const usersCollection = db.collection('users');
+    const { status, blocked } = req.body;
+    const { ObjectId } = await import('mongodb');
+    
+    const updateFields = { updatedAt: new Date() };
+    if (status !== undefined) updateFields.status = status;
+    if (blocked !== undefined) updateFields.blocked = blocked;
+    
+    const result = await usersCollection.updateOne(
+      { _id: new ObjectId(req.params.userId) },
+      { $set: updateFields }
+    );
+    
+    res.json({ success: true, modified: result.modifiedCount });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 
 app.get('/api/mongo/analytics', requireAuth, async (req, res) => {
   try {
@@ -131,6 +153,46 @@ app.get('/api/mongo/analytics', requireAuth, async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+app.get('/api/mongo/earnings', requireAuth, async (req, res) => {
+  try {
+    const db = getDatabase();
+    const productsCollection = db.collection('products');
+    
+    const COMMISSION_RATE = 0.10;
+    
+    const allProducts = await productsCollection.find().toArray();
+    
+    const totalTaskValue = allProducts.reduce((sum, p) => sum + (p.price || 0), 0);
+    const estimatedCommission = totalTaskValue * COMMISSION_RATE;
+    
+    const productsByType = await productsCollection.aggregate([
+      { $group: { 
+        _id: '$task_type', 
+        count: { $sum: 1 },
+        totalValue: { $sum: '$price' }
+      }},
+      { $project: { 
+        type: '$_id', 
+        count: 1, 
+        totalValue: 1,
+        commission: { $multiply: ['$totalValue', COMMISSION_RATE] },
+        _id: 0 
+      }}
+    ]).toArray();
+    
+    res.json({
+      totalTaskValue,
+      estimatedCommission,
+      commissionRate: COMMISSION_RATE,
+      netEarnings: estimatedCommission,
+      productsByType,
+      totalProducts: allProducts.length
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 
 app.get('/api/mongo/products', requireAuth, async (req, res) => {
   try {
@@ -177,67 +239,6 @@ app.get('/api/mongo/products', requireAuth, async (req, res) => {
   }
 });
 
-app.get('/api/mongo/earnings', requireAuth, async (req, res) => {
-  try {
-    const db = getDatabase();
-    const productsCollection = db.collection('products');
-    
-    const COMMISSION_RATE = 0.10;
-    
-    const allProducts = await productsCollection.find().toArray();
-    
-    const totalTaskValue = allProducts.reduce((sum, p) => sum + (p.price || 0), 0);
-    const estimatedCommission = totalTaskValue * COMMISSION_RATE;
-    
-    const productsByType = await productsCollection.aggregate([
-      { $group: { 
-        _id: '$task_type', 
-        count: { $sum: 1 },
-        totalValue: { $sum: '$price' }
-      }},
-      { $project: { 
-        type: '$_id', 
-        count: 1, 
-        totalValue: 1,
-        commission: { $multiply: ['$totalValue', COMMISSION_RATE] },
-        _id: 0 
-      }}
-    ]).toArray();
-    
-    res.json({
-      totalTaskValue,
-      estimatedCommission,
-      commissionRate: COMMISSION_RATE,
-      netEarnings: estimatedCommission,
-      productsByType,
-      totalProducts: allProducts.length
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.patch('/api/mongo/users/:userId/status', requireAuth, async (req, res) => {
-  try {
-    const db = getDatabase();
-    const usersCollection = db.collection('users');
-    const { status, blocked } = req.body;
-    const { ObjectId } = await import('mongodb');
-    
-    const updateFields = { updatedAt: new Date() };
-    if (status !== undefined) updateFields.status = status;
-    if (blocked !== undefined) updateFields.blocked = blocked;
-    
-    const result = await usersCollection.updateOne(
-      { _id: new ObjectId(req.params.userId) },
-      { $set: updateFields }
-    );
-    
-    res.json({ success: true, modified: result.modifiedCount });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
 
 app.post('/api/mongo/payments', requireAuth, async (req, res) => {
   try {
@@ -264,7 +265,6 @@ app.post('/api/mongo/payments', requireAuth, async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-
 app.get('/api/mongo/payments', requireAuth, async (req, res) => {
   try {
     const db = getDatabase();
