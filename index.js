@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 import { connectToDatabase, getDatabase } from './db.js';
 import { requireAuth } from './auth.js';
+import { pipeline } from 'stream';
 
 
 const app = express();
@@ -135,18 +136,42 @@ app.get('/api/mongo/products', requireAuth, async (req, res) => {
   try {
     const db = getDatabase();
     const productsCollection = db.collection('products');
-    const usersCollection = db.collection('users');
+
+    const products = await productsCollection.aggregate([
+      {
+        $sort: {createdAt: -1}
+      },
+      {
+        $lookup: {
+          from: 'users',
+          let: {'userId': '$created_by'},
+          pipeline: [
+            {
+              $match: {
+                $expr: { 
+                  $eq: ['$_id', '$$userId']
+                }
+              }
+            },
+            {
+              $project: {
+                  _id: 0,
+                  name: 1,
+                  email: 1,
+                  phone: 1
+              }
+            }
+          ],
+          as: 'user'
+        }
+      },
+      {
+        $unwind: {path: '$user'}
+      }
+    ]).toArray();
     
-    const products = await productsCollection.find().sort({ createdAt: -1 }).toArray();
     
-    const productsWithUsers = await Promise.all(products.map(async (product) => {
-      const user = await usersCollection.findOne({ _id: product.created_by }, {
-        projection: { name: 1, email: 1, phone: 1 }
-      });
-      return { ...product, creator: user };
-    }));
-    
-    res.json({ products: productsWithUsers });
+    res.json({ products });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -217,17 +242,17 @@ app.patch('/api/mongo/users/:userId/status', requireAuth, async (req, res) => {
 app.post('/api/mongo/payments', requireAuth, async (req, res) => {
   try {
     const db = getDatabase();
-    const paymentsCollection = db.collection('payments');
+    const paymentsCollection = db.collection('transactions');
     const { userId, amount, method, productId, description } = req.body;
     const { ObjectId } = await import('mongodb');
     
     const payment = {
-      userId: new ObjectId(userId),
+      user_id: new ObjectId(userId),
       amount: parseFloat(amount),
       method,
-      productId: productId ? new ObjectId(productId) : null,
+      product_id: productId ? new ObjectId(productId) : null,
       description,
-      status: 'completed',
+      status: 'success',
       paidAt: new Date(),
       createdAt: new Date()
     };
@@ -243,23 +268,92 @@ app.post('/api/mongo/payments', requireAuth, async (req, res) => {
 app.get('/api/mongo/payments', requireAuth, async (req, res) => {
   try {
     const db = getDatabase();
-    const paymentsCollection = db.collection('payments');
+    const paymentsCollection = db.collection('transactions');
     const usersCollection = db.collection('users');
+
+    const payments = await paymentsCollection.aggregate([
+      {
+        $sort: {createdAt: -1}
+      },
+      {
+        $lookup: {
+          from: 'users',
+          let: {'userId': '$user_id'},
+          pipeline: [
+            {
+              $match: {
+                $expr: { 
+                  $eq: ['$_id', '$$userId']
+                }
+              }
+            },
+            {
+              $project: {
+                  _id: 0,
+                  name: 1,
+                  email: 1,
+                  phone: 1
+              }
+            }
+          ],
+          as: 'user'
+        }
+      },
+      {
+        $unwind: {path: '$user'}
+      }
+    ]).toArray();
     
-    const payments = await paymentsCollection.find().sort({ createdAt: -1 }).toArray();
+    // const paymentsWithUsers = await Promise.all(payments.map(async (payment) => {
+    //   // const user = await usersCollection.findOne({ _id: payment.user_id }, {
+    //   //   projection: { name: 1, email: 1, phone: 1 }
+    //   // });
+    //   // return { ...payment, user };
+    //   return payment;
+    // }));
     
-    const paymentsWithUsers = await Promise.all(payments.map(async (payment) => {
-      const user = await usersCollection.findOne({ _id: payment.userId }, {
-        projection: { name: 1, email: 1, phone: 1 }
-      });
-      return { ...payment, user };
-    }));
-    
-    res.json({ payments: paymentsWithUsers });
+    res.json({ payments });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
+
+
+app.get('/api/mongo/global-settings', requireAuth, async (req, res) => {
+  try {
+    const db = getDatabase();
+    const global_settings = db.collection('global_settings');
+    
+    const result = await global_settings.find().toArray();
+    
+    res.json({ success: true, result});
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+app.put('/api/mongo/global-settings', requireAuth, async (req, res) => {
+  try {
+    const db = getDatabase();
+    const global_settings = db.collection('global_settings');
+    const { commission_rate, description } = req.body;
+    
+    const updateData = {
+      commission_rate,
+      description,
+      updatedAt: new Date()
+    };
+    
+    const result = await global_settings.updateOne(
+      {},
+      { $set: updateData }
+    );
+    
+    res.json({ success: true});
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 
 async function startServer() {
   try {
